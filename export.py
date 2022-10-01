@@ -50,7 +50,12 @@ if __name__ == "__main__":
         action="store_true",
         help="True for using onnx_graphsurgeon to sort and remove unused",
     )
-    parser.add_argument("--type-nms", type=int, default=0, help="TensorRT: EfficientNMS (type-nms=0) or BatchedNMS(type-nms=1)")
+    parser.add_argument(
+        "--type-nms",
+        type=int,
+        default=0,
+        help="TensorRT: EfficientNMS (type-nms=0) or BatchedNMS(type-nms=1)",
+    )
     opt = parser.parse_args()
     opt.img_size *= 2 if len(opt.img_size) == 1 else 1  # expand
     opt.dynamic = opt.dynamic and not opt.end2end
@@ -179,13 +184,14 @@ if __name__ == "__main__":
                     else "onnxruntime"
                 )
                 model = End2End(
-                    model,
-                    opt.topk_all,
-                    opt.iou_thres,
-                    opt.conf_thres,
-                    opt.max_wh,
-                    device,
-                    len(labels),
+                    model=model,
+                    max_obj=opt.topk_all,
+                    iou_thres=opt.iou_thres,
+                    score_thres=opt.conf_thres,
+                    max_wh=opt.max_wh,
+                    device=device,
+                    n_classes=len(labels),
+                    type_nms=opt.type_nms,
                 )
                 if opt.end2end and opt.max_wh is None:
                     output_names = ["num_dets", "det_boxes", "det_scores", "det_classes"]
@@ -220,19 +226,21 @@ if __name__ == "__main__":
         onnx_model = onnx.load(f)  # load onnx model
         onnx.checker.check_model(onnx_model)  # check onnx model
 
-        # if opt.end2end and opt.max_wh is None:
-        #     for i in onnx_model.graph.output:
-        #         for j in i.type.tensor_type.shape.dim:
-        #             j.dim_param = str(shapes.pop(0))
+        if opt.end2end and opt.max_wh is None:
+            for i in onnx_model.graph.output:
+                for j in i.type.tensor_type.shape.dim:
+                    j.dim_param = str(shapes.pop(0))
 
         # print(onnx.helper.printable_graph(onnx_model.graph))  # print a human readable model
 
         # # Metadata
-        # d = {'stride': int(max(model.stride))}
-        # for k, v in d.items():
-        #     meta = onnx_model.metadata_props.add()
-        #     meta.key, meta.value = k, str(v)
-        # onnx.save(onnx_model, f)
+        d = {
+            "stride": int(max(model.model.stride if opt.end2end else model.stride)),
+            "names": model.model.names if opt.end2end else model.names,
+        }
+        for k, v in d.items():
+            meta = onnx_model.metadata_props.add()
+            meta.key, meta.value = k, str(v)
 
         if opt.simplify:
             try:
