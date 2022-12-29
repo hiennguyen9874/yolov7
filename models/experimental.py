@@ -170,6 +170,73 @@ class TRT_NMS(torch.autograd.Function):
             score_threshold_f=score_threshold,
             outputs=4,
         )
+        det_nums, det_boxes, det_scores, det_classes = out
+        return det_nums, det_boxes, det_scores, det_classes
+
+
+class TRT_NMS2(torch.autograd.Function):
+    """TensorRT NMS operation"""
+
+    @staticmethod
+    def forward(
+        ctx,
+        boxes,
+        scores,
+        shareLocation=1,
+        numClasses=80,
+        backgroundLabelId=-1,
+        topK=100,
+        keepTopK=100,
+        scoreThreshold=0.35,
+        iouThreshold=0.65,
+        isNormalized=0,
+        clipBoxes=0,
+        scoreBits=16,
+        caffeSemantics=0,
+    ):
+        batch_size, num_boxes, num_classes = scores.shape
+        num_det = torch.randint(0, keepTopK, (batch_size, 1), dtype=torch.int32)
+        det_boxes = torch.randn(batch_size, keepTopK, 4)
+        det_scores = torch.randn(batch_size, keepTopK)
+        det_classes = torch.randint(
+            0, num_classes, (batch_size, keepTopK), dtype=torch.int32
+        ).float()
+        return num_det, det_boxes, det_scores, det_classes
+
+    @staticmethod
+    def symbolic(
+        g,
+        boxes,
+        scores,
+        shareLocation=1,
+        numClasses=80,
+        backgroundLabelId=-1,
+        topK=100,
+        keepTopK=100,
+        scoreThreshold=0.35,
+        iouThreshold=0.65,
+        isNormalized=0,
+        clipBoxes=0,
+        scoreBits=16,
+        caffeSemantics=0,
+    ):
+        out = g.op(
+            "TRT::BatchedNMSDynamic_TRT",
+            boxes,
+            scores,
+            shareLocation_i=shareLocation,
+            numClasses_i=numClasses,
+            backgroundLabelId_i=backgroundLabelId,
+            topK_i=topK,
+            keepTopK_i=keepTopK,
+            scoreThreshold_f=scoreThreshold,
+            iouThreshold_f=iouThreshold,
+            isNormalized_i=isNormalized,
+            clipBoxes_i=clipBoxes,
+            scoreBits_i=scoreBits,
+            caffeSemantics_i=caffeSemantics,
+            outputs=4,
+        )
         nums, boxes, scores, classes = out
         return nums, boxes, scores, classes
 
@@ -178,7 +245,15 @@ class ONNX_ORT(nn.Module):
     """onnx module with ONNX-Runtime NMS operation."""
 
     def __init__(
-        self, max_obj=100, iou_thres=0.45, score_thres=0.25, max_wh=640, device=None, n_classes=80
+        self,
+        max_obj=100,
+        iou_thres=0.45,
+        score_thres=0.25,
+        max_wh=640,
+        device=None,
+        n_classes=80,
+        *args,
+        **kwargs
     ):
         super().__init__()
         self.device = device if device else torch.device("cpu")
@@ -222,10 +297,20 @@ class ONNX_TRT(nn.Module):
     """onnx module with TensorRT NMS operation."""
 
     def __init__(
-        self, max_obj=100, iou_thres=0.45, score_thres=0.25, max_wh=None, device=None, n_classes=80
+        self,
+        max_obj=100,
+        iou_thres=0.45,
+        score_thres=0.25,
+        max_wh=None,
+        device=None,
+        n_classes=80,
+        type_nms=0,
+        *args,
+        **kwargs
     ):
         super().__init__()
         assert max_wh is None
+        assert type_nms in [0, 1]
         self.device = device if device else torch.device("cpu")
         self.background_class = (-1,)
         self.box_coding = (1,)
@@ -236,6 +321,15 @@ class ONNX_TRT(nn.Module):
         self.score_threshold = score_thres
         self.n_classes = n_classes
 
+        self.type_nms = type_nms
+
+        if self.type_nms == 1:
+            self.convert_matrix = torch.tensor(
+                [[1, 0, 1, 0], [0, 1, 0, 1], [-0.5, 0, 0.5, 0], [0, -0.5, 0, 0.5]],
+                dtype=torch.float32,
+                device=self.device,
+            )
+
     def forward(self, x):
         boxes = x[:, :, :4]
         conf = x[:, :, 4:5]
@@ -245,17 +339,38 @@ class ONNX_TRT(nn.Module):
             # so there is no need to multiplicate.
         else:
             scores *= conf  # conf = obj_conf * cls_conf
-        num_det, det_boxes, det_scores, det_classes = TRT_NMS.apply(
-            boxes,
-            scores,
-            self.background_class,
-            self.box_coding,
-            self.iou_threshold,
-            self.max_obj,
-            self.plugin_version,
-            self.score_activation,
-            self.score_threshold,
-        )
+
+        if self.type_nms == 0:
+            num_det, det_boxes, det_scores, det_classes = TRT_NMS.apply(
+                boxes,
+                scores,
+                self.background_class,
+                self.box_coding,
+                self.iou_threshold,
+                self.max_obj,
+                self.plugin_version,
+                self.score_activation,
+                self.score_threshold,
+            )
+        else:
+            boxes @= self.convert_matrix
+            boxes = boxes.unsqueeze(dim=2)
+            num_det, det_boxes, det_scores, det_classes = TRT_NMS2.apply(
+                boxes,
+                scores,
+                1,
+                self.n_classes,
+                -1,
+                self.max_obj,
+                self.max_obj,
+                self.score_threshold,
+                self.iou_threshold,
+                0,
+                0,
+                16,
+                0,
+            )
+
         return num_det, det_boxes, det_scores, det_classes
 
 
@@ -271,6 +386,7 @@ class End2End(nn.Module):
         max_wh=None,
         device=None,
         n_classes=80,
+        type_nms=0,
     ):
         super().__init__()
         device = device if device else torch.device("cpu")
@@ -278,7 +394,15 @@ class End2End(nn.Module):
         self.model = model.to(device)
         self.model.model[-1].end2end = True
         self.patch_model = ONNX_TRT if max_wh is None else ONNX_ORT
-        self.end2end = self.patch_model(max_obj, iou_thres, score_thres, max_wh, device, n_classes)
+        self.end2end = self.patch_model(
+            max_obj=max_obj,
+            iou_thres=iou_thres,
+            score_thres=score_thres,
+            max_wh=max_wh,
+            device=device,
+            n_classes=n_classes,
+            type_nms=type_nms,
+        )
         self.end2end.eval()
 
     def forward(self, x):

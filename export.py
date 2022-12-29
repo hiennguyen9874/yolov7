@@ -45,6 +45,17 @@ if __name__ == "__main__":
     parser.add_argument("--include-nms", action="store_true", help="export end2end onnx")
     parser.add_argument("--fp16", action="store_true", help="CoreML FP16 half-precision export")
     parser.add_argument("--int8", action="store_true", help="CoreML INT8 quantization")
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="True for using onnx_graphsurgeon to sort and remove unused",
+    )
+    parser.add_argument(
+        "--type-nms",
+        type=int,
+        default=0,
+        help="TensorRT: EfficientNMS (type-nms=0) or BatchedNMS(type-nms=1)",
+    )
     opt = parser.parse_args()
     opt.img_size *= 2 if len(opt.img_size) == 1 else 1  # expand
     opt.dynamic = opt.dynamic and not opt.end2end
@@ -173,13 +184,14 @@ if __name__ == "__main__":
                     else "onnxruntime"
                 )
                 model = End2End(
-                    model,
-                    opt.topk_all,
-                    opt.iou_thres,
-                    opt.conf_thres,
-                    opt.max_wh,
-                    device,
-                    len(labels),
+                    model=model,
+                    max_obj=opt.topk_all,
+                    iou_thres=opt.iou_thres,
+                    score_thres=opt.conf_thres,
+                    max_wh=opt.max_wh,
+                    device=device,
+                    n_classes=len(labels),
+                    type_nms=opt.type_nms,
                 )
                 if opt.end2end and opt.max_wh is None:
                     output_names = ["num_dets", "det_boxes", "det_scores", "det_classes"]
@@ -204,7 +216,7 @@ if __name__ == "__main__":
             img,
             f,
             verbose=False,
-            opset_version=12,
+            opset_version=14,
             input_names=["images"],
             output_names=output_names,
             dynamic_axes=dynamic_axes,
@@ -222,11 +234,13 @@ if __name__ == "__main__":
         # print(onnx.helper.printable_graph(onnx_model.graph))  # print a human readable model
 
         # # Metadata
-        # d = {'stride': int(max(model.stride))}
-        # for k, v in d.items():
-        #     meta = onnx_model.metadata_props.add()
-        #     meta.key, meta.value = k, str(v)
-        # onnx.save(onnx_model, f)
+        d = {
+            "stride": int(max(model.model.stride if opt.end2end else model.stride)),
+            "names": model.model.names if opt.end2end else model.names,
+        }
+        for k, v in d.items():
+            meta = onnx_model.metadata_props.add()
+            meta.key, meta.value = k, str(v)
 
         if opt.simplify:
             try:
@@ -237,6 +251,17 @@ if __name__ == "__main__":
                 assert check, "assert check failed"
             except Exception as e:
                 print(f"Simplifier failure: {e}")
+
+        if opt.cleanup:
+            try:
+                print("\nStarting to cleanup ONNX using onnx_graphsurgeon...")
+                import onnx_graphsurgeon as gs
+
+                graph = gs.import_onnx(onnx_model)
+                graph = graph.cleanup().toposort()
+                onnx_model = gs.export_onnx(graph)
+            except Exception as e:
+                print(f"Cleanup failure: {e}")
 
         # print(onnx.helper.printable_graph(onnx_model.graph))  # print a human readable model
         onnx.save(onnx_model, f)
