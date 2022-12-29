@@ -12,7 +12,7 @@ See https://github.com/WongKinYiu/yolov7#export for more info.
 
 ```bash
 #install onnx-simplifier not listed in general yolov7 requirements.txt
-pip3 install onnx-simplifier 
+pip3 install onnx-simplifier
 
 # Pytorch Yolov7 -> ONNX with grid, EfficientNMS plugin and dynamic batch size
 python export.py --weights ./yolov7.pt --grid --end2end --dynamic-batch --simplify --topk-all 100 --iou-thres 0.65 --conf-thres 0.35 --img-size 640 640
@@ -41,6 +41,7 @@ Example output of test with RTX 3090.
 [I] Total GPU Compute Time: 3.03404 s
 [I] Explanations of the performance metrics are printed in the verbose logs.
 ```
+
 Note: 73.5 qps x batch 8 = 588 fps @ ~15ms latency.
 
 ## Model Repository
