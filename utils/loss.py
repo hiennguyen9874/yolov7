@@ -706,9 +706,9 @@ class ComputeLossOTA:
 
         # indices, anch = self.find_positive(p, targets)
         indices, anch = self.find_3_positive(p, targets)
-        #indices, anch = self.find_4_positive(p, targets)
-        #indices, anch = self.find_5_positive(p, targets)
-        #indices, anch = self.find_9_positive(p, targets)
+        # indices, anch = self.find_4_positive(p, targets)
+        # indices, anch = self.find_5_positive(p, targets)
+        # indices, anch = self.find_9_positive(p, targets)
         device = torch.device(targets.device)
         matching_bs = [[] for pp in p]
         matching_as = [[] for pp in p]
@@ -749,9 +749,9 @@ class ComputeLossOTA:
                 all_gj.append(gj)
                 all_gi.append(gi)
                 all_anch.append(anch[i][idx])
-                from_which_layer.append((torch.ones(size=(len(b),)) * i).to(device)
-                
-                fg_pred = pi[b, a, gj, gi]                
+                from_which_layer.append((torch.ones(size=(len(b),)) * i).to(device))
+
+                fg_pred = pi[b, a, gj, gi]
                 p_obj.append(fg_pred[:, 4:5])
                 p_cls.append(fg_pred[:, 5:])
 
